@@ -73,8 +73,8 @@ def do(batchname, cmdfmts, count, backend, opts):
 
 
 def record_batch(name, time_all, recs, opts):
-    print("Batch {}: {}".format(name, time_all))
-    print(recs)                 # TODO better
+    recavg = sum([t for _, t in recs]) / len(recs)
+    print("{} n={}: tot={} avg={}".format(name, len(recs), time_all, recavg))
 
 
 def run_bench(opts):
@@ -86,12 +86,13 @@ def run_bench(opts):
             launched = do_launch(count, backend, opts)
             do_delete(launched, backend, opts)
 
-            launched = do_launch(1, backend, opts)[0]
-            copies = do_copy(launched, count, backend, opts)
+            src = do_launch(1, backend, opts)[0]
+            copies = do_copy(src, count, backend, opts)
             do_delete(copies, backend, opts)
 
-            snapshots = do_snapshot(launched, count, backend, opts)
-            do_delete(snapshots, backend, opts)
+            do_snapshot(src, count, backend, opts)
+            # deleting src will delete the snapshots too:
+            do_delete([src], backend, opts)
 
 if __name__ == "__main__":
     p = ArgumentParser(description="LXD storage bencher")
