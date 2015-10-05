@@ -349,7 +349,7 @@ def show_report(the_id, csv=False):
 
 
 def show_runs():
-    dbc.execute("SELECT * FROM runs")
+    dbc.execute("SELECT id, date, message FROM runs")
     rows = dbc.fetchall()
     print(tabulate.tabulate(rows))
 
