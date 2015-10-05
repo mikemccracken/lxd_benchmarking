@@ -7,6 +7,7 @@ import sys
 from subprocess import (check_output, STDOUT, CalledProcessError,
                         Popen, call)
 import sqlite3
+import tabulate
 from tempfile import mkdtemp
 import time
 import traceback
@@ -62,15 +63,21 @@ def setup_backend(backend, tmp_dir, opts):
     lxd_dir = os.path.join(tmp_dir, 'lxd_dir')
     os.makedirs(lxd_dir, exist_ok=True)
 
-    info = ""
+    if backend == "dir":
+        lxd_proc = spawn_lxd(tmp_dir)
+        return dict(lxd_proc=lxd_proc)
+
     if backend == "lvm":
+        lxd_proc = spawn_lxd(tmp_dir)
         try:
-            check_output("sudo {}/lxd-setup-lvm-storage "
+            check_output("sudo -E {}/lxd-setup-lvm-storage "
                          "-s 10G".format(LXD_SCRIPTS_DIR),
                          shell=True, stderr=STDOUT, env=os.environ.copy())
         except CalledProcessError as e:
-            print("output:" + e.output.decode())
+            print("output: " + e.output.decode())
             raise e
+        return dict(lxd_proc=lxd_proc)
+
     elif backend == 'btrfs':
         backingfile = None
         if opts.blockdev == "loop":
@@ -87,27 +94,31 @@ def setup_backend(backend, tmp_dir, opts):
                      shell=True)
         check_output("sudo mount {} {}".format(dev, lxd_dir),
                      shell=True)
-        info = (lxd_dir, dev, backingfile)
+        lxd_proc = spawn_lxd(tmp_dir)
+        return dict(lxd_proc=lxd_proc, lxd_dir=lxd_dir,
+                    dev=dev, backingfile=backingfile)
 
     elif backend == 'zfs':
         pass
-    elif backend != 'dir':
+    else:
         raise Exception("Unknown backend " + backend)
 
-    return info
 
-
-def teardown_backend(backend, info, opts):
-    if backend == "lvm":
+def teardown_backend(backend, tmp_dir, info, opts):
+    if backend == "dir":
+        teardown_lxd(tmp_dir, info['lxd_proc'], opts)
+    elif backend == "lvm":
         check_output("sudo -E {}/lxd-setup-lvm-storage "
                      "--destroy".format(LXD_SCRIPTS_DIR),
                      shell=True)
+        teardown_lxd(tmp_dir, info['lxd_proc'], opts)
     elif backend == 'btrfs':
-        mtpt, loopdev, backingfile = info
-        check_output("sudo umount {}".format(mtpt), shell=True)
+        teardown_lxd(tmp_dir, info['lxd_proc'], opts)
+        check_output("sudo umount {}".format(info['lxd_dir']), shell=True)
         if opts.blockdev == 'loop':
-            check_output("sudo losetup -d {}".format(loopdev), shell=True)
-            check_output("sudo rm -f {}".format(backingfile), shell=True)
+            check_output("sudo losetup -d {}".format(info['dev']), shell=True)
+            check_output("sudo rm -f {}".format(info['backingfile']),
+                         shell=True)
 
 
 def do_launch(count, backend, opts):
@@ -128,7 +139,7 @@ def do_delete(to_delete, tag, backend, opts):
 
 
 def do_copy(source, count, backend, opts):
-    tgtfmt = "copy-{i}-backend"
+    tgtfmt = "copy-{i}-" + backend
     cmdfmt = "lxc copy  " + source + " {target}"
     return do('copy', [(cmdfmt, tgtfmt)], count, backend, opts)
 
@@ -141,6 +152,11 @@ def do_snapshot(source, count, backend, opts):
 
 
 def do(batchname, cmdfmts, count, backend, opts):
+
+    def log(s):
+        if opts.verbose:
+            print(s)
+
     recs = []
     cmds = []
     completed_tgts = []
@@ -162,8 +178,7 @@ def do(batchname, cmdfmts, count, backend, opts):
     start_all = time.time()
     for cmd, tgt in cmds:
         start = time.time()
-        if opts.verbose:
-            print("+ " + cmd)
+        log("+ " + cmd)
         try:
             check_output(cmd, shell=True, stderr=STDOUT)
             completed_tgts.append(tgt)
@@ -172,8 +187,7 @@ def do(batchname, cmdfmts, count, backend, opts):
             print("output: " + e.output.decode())
             raise Exception("Fatal ERROR")
 
-        if opts.verbose:
-            print("=> OK")
+        log("=> OK")
 
         recs.append((cmd, time.time() - start))
     time_all = time.time() - start_all
@@ -189,7 +203,6 @@ def do(batchname, cmdfmts, count, backend, opts):
 def record_batch(name, time_all, recs, count, backend, mem_increase,
                  load_increase, disk_increase, opts):
     recavg = sum([t for _, t in recs]) / len(recs)
-    print("{} n={}: tot={} avg={}".format(name, len(recs), time_all, recavg))
 
     dbc.execute("INSERT INTO timings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (name, backend, len(recs), count, time_all, recavg,
@@ -214,11 +227,9 @@ def spawn_lxd(temp_dir):
     rv = -1
     while rv != 0:
         cmd = "lxc finger "
-        print("calling {}".format(cmd))
-        print("lxd dir is '{}'".format(lxd_dir))
         rv = call(cmd, shell=True)
         time.sleep(1.5)
-
+    call("lxc finger --debug", shell=True)
     # check_call("lxc config  "
     #            " set core.https_address 127.0.0.1:22222",
     #            shell=True)
@@ -237,8 +248,6 @@ def teardown_lxd(tmp_dir, lxd_proc, opts):
     time.sleep(2)
     call("sudo kill -9 {}".format(lxd_pid), shell=True)
 
-
-def kill_monitord(tmp_dir):
     while True:
         try:
             pid = check_output("ps aux | grep lxc-monitord "
@@ -258,15 +267,17 @@ def run_bench(opts):
         tmp_dir = mkdtemp(prefix="lxd_tmp_dir")
         call("chmod +x {}".format(tmp_dir), shell=True)
         binfo = setup_backend(backend, tmp_dir, opts)
-        lxd_proc = spawn_lxd(tmp_dir)
         import_image(opts.image)
         try:
             for count in opts.counts.split(','):
                 count = int(count)
                 print("## N = {}".format(count))
 
+                print("launching {} containers".format(count))
                 launched = do_launch(count, backend, opts)
+                print("listing")
                 do_list(count, "containers", backend, opts)
+                print("deleting")
                 do_delete(launched, 'containers', backend, opts)
 
                 src = do_launch(1, backend, opts)[0]
@@ -279,30 +290,37 @@ def run_bench(opts):
                 do_delete([src], 'container-with-snaps', backend, opts)
         finally:
             delete_image(opts.image)
-            teardown_lxd(tmp_dir, lxd_proc, opts)
-            kill_monitord(tmp_dir)
-            teardown_backend(backend, binfo, opts)
+            teardown_backend(backend, tmp_dir, binfo, opts)
             if not opts.keep:
                 call("sudo rm -rf {}".format(tmp_dir), shell=True)
 
-if __name__ == "__main__":
-    p = ArgumentParser(description="LXD storage bencher")
-    p.add_argument("counts",
-                   help="comma separated list of counts of"
-                   " containers/snapshots/copies to bench")
-    p.add_argument("backends",
-                   help="a comma separated list of backends to use.",
-                   default="lvm,zfs,dir,btrfs")
-    p.add_argument("--image", default='ubuntu',
-                   help="Image hash or alias to use")
-    p.add_argument("-v", "--verbose", action='store_true')
-    p.add_argument("-m", dest='message', default="",
-                   help="message about run")
-    p.add_argument("--keep", default=False,
-                   help="do not tear down lxd dirs")
-    p.add_argument("--blockdev", default='loop',
-                   help="block device to use for storage backends")
-    opts = p.parse_args(sys.argv[1:])
+
+def show_report(the_id, csv=False):
+    dbc.execute("SELECT * FROM runs where id = ?", (the_id, ))
+    run_rows = dbc.fetchall()
+    print(tabulate.tabulate(run_rows))
+    dbc.execute("SELECT * FROM timings WHERE run_id = {} "
+                "ORDER BY count, batch".format(the_id))
+    rows = dbc.fetchall()
+    headers = ['batch', 'backend', 'numrecs', 'count',
+               'total_time', 'avg_time', 'mem_inc', 'load_inc', 'disk_inc',
+               'image', 'runid']
+    if csv:
+        fmt = tabulate.simple_separated_format(",")
+    else:
+        fmt = 'simple'
+    print(tabulate.tabulate(rows, headers=headers, tablefmt=fmt,
+                            floatfmt='.3g'))
+
+
+def show_runs():
+    dbc.execute("SELECT * FROM runs")
+    rows = dbc.fetchall()
+    print(tabulate.tabulate(rows))
+
+
+def init_db():
+    global db, dbc
     db = sqlite3.connect("bench.db")
     dbc = db.cursor()
 
@@ -313,18 +331,61 @@ if __name__ == "__main__":
                 "total_time real, avg_time real, "
                 "mem_increase int, load_increase real, disk_increase int, "
                 "image text, run_id int)")
-    dbc.execute("INSERT INTO runs(argv, date, message) "
-                "VALUES(?, date('now'), ?)",
-                (str(sys.argv[1:]), opts.message))
-    dbc.execute("select max(id) + 1 from runs")
-    run_id = dbc.fetchone()[0]
 
-    try:
-        run_bench(opts)
-    except Exception as e:
-        print("Stopped because of an error. Go clean me up, sorry")
-        print(traceback.format_exc())
-    finally:
-        db.commit()
-        db.close()
+
+if __name__ == "__main__":
+    p = ArgumentParser(description="LXD storage bencher")
+    p.add_argument("-v", "--verbose", action='store_true')
+
+    sps = p.add_subparsers(dest="subcommand_name",
+                           help='sub-command help???')
+
+    run_p = sps.add_parser('run', help='run a bench help')
+    run_p.add_argument("counts",
+                       help="comma separated list of counts of"
+                       " containers/snapshots/copies to bench")
+    run_p.add_argument("backends",
+                       help="a comma separated list of backends to use.",
+                       default="lvm,zfs,dir,btrfs")
+    run_p.add_argument("--image", default='ubuntu',
+                       help="Image hash or alias to use")
+    run_p.add_argument("-m", dest='message', default="",
+                       help="message about run")
+    run_p.add_argument("--keep", default=False,
+                       help="do not tear down lxd dirs")
+    run_p.add_argument("--blockdev", default='loop',
+                       help="block device to use for storage backends")
+    show_p = sps.add_parser('show', help='show runs')
+    show_p.add_argument("--run", dest="run_id", help="id to show",
+                        default=None)
+    show_p.add_argument("--csv", action='store_true',
+                        help="Show results as csv")
+    opts = p.parse_args(sys.argv[1:])
+
+    init_db()
+
+    if opts.subcommand_name == 'run':
+
+        dbc.execute("INSERT INTO runs(argv, date, message) "
+                    "VALUES(?, datetime('now'), ?)",
+                    (str(sys.argv[1:]), opts.message))
+        dbc.execute("select max(id) from runs")
+        run_id = dbc.fetchone()[0]
+
+        try:
+            run_bench(opts)
+            show_report(run_id)
+        except Exception as e:
+            print("Stopped because of an error. Go clean me up, sorry")
+            print(traceback.format_exc())
+        finally:
+            db.commit()
+            db.close()
+
+    elif opts.subcommand_name == 'show':
+        if opts.run_id is None:
+            show_runs()
+        else:
+            show_report(opts.run_id, opts.csv)
+
     print("Done, OK")
