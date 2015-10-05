@@ -138,6 +138,38 @@ def do_delete(to_delete, tag, backend, opts):
     do('delete-' + tag, cmds, 0, backend, opts)
 
 
+def wait_for_cloudinit_done(container):
+    print("waiting for " + container)
+    for i in range(20):
+        time.sleep(2)
+        try:
+            result_json = check_output("lxc exec -- "
+                                       "sudo cat /run/cloud-init/result.json",
+                                       stderr=STDOUT,
+                                       shell=True)
+        except:
+            continue
+
+        if result == '':
+            continue
+
+        try:
+            ret = json.loads(result_json)
+        except:
+            continue
+
+        errors = ret['v1']['errors']
+        if len(errors):
+            print(errors)
+            raise Exception("Cloud-init threw an error", errors)
+        break
+
+
+def do_pause(to_pause, backend, opts):
+    cmds = ["lxc pause " + to_pause]
+    do('pause', cmds, 0, backend, opts)
+
+
 def do_copy(source, count, backend, opts):
     tgtfmt = "copy-{i}-" + backend
     cmdfmt = "lxc copy  " + source + " {target}"
@@ -281,6 +313,9 @@ def run_bench(opts):
                 do_delete(launched, 'containers', backend, opts)
 
                 src = do_launch(1, backend, opts)[0]
+                if opts.image == 'ubuntu':
+                    wait_for_cloudinit_done(src)
+                do_pause(src, backend, opts)
                 copies = do_copy(src, count, backend, opts)
                 do_list(count, "copies", backend, opts)
                 do_delete(copies, 'copies', backend, opts)
