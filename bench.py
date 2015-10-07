@@ -363,12 +363,13 @@ def run_bench(opts):
                 print("*** cleaning up {} and snaps".format(src))
                 # deleting src will delete the snapshots too:
                 do_delete([src], 'container-with-snaps', count, backend, opts)
-                print()
+                print("*** check that we're clean:")
+                call("lxc list", shell=True)
         except:
             print("Stopped because of an error. Go clean me up, sorry.")
             print(traceback.format_exc())
             print("try LXD_DIR={}/lxd_dir lxc list".format(tmp_dir))
-            read("done poking? ")
+            input("done poking? ")
 
         finally:
             delete_image()
