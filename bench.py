@@ -138,7 +138,8 @@ def teardown_backend(backend, tmp_dir, info, opts):
             check_output("sudo losetup -d {}".format(info['dev']), shell=True)
             check_output("sudo rm -f {}".format(info['backingfile']),
                          shell=True)
-
+        else:
+            check_output("sudo wipefs -a {}".format(info['dev']), shell=True)
 
 def do_launch(count, backend, opts, record=True):
     tgtfmt = "ctr-{i}-" + backend
