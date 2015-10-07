@@ -140,20 +140,21 @@ def teardown_backend(backend, tmp_dir, info, opts):
                          shell=True)
 
 
-def do_launch(count, backend, opts):
+def do_launch(count, backend, opts, record=True):
     tgtfmt = "ctr-{i}-" + backend
     cmdfmt = "lxc launch img {target}"
-    return do('launch', [(cmdfmt, tgtfmt)], count, backend, opts)
+    return do_fmt('launch', cmdfmt, tgtfmt, count, backend, opts,
+                  record=record)
 
 
 def do_list(count, tag, backend, opts):
     cmds = ["lxc list"]
-    return do('list-' + tag, cmds, 0, backend, opts)
+    return do_cmds('list-' + tag, cmds, count, backend, opts)
 
 
-def do_delete(to_delete, tag, backend, opts):
+def do_delete(to_delete, tag, count, backend, opts):
     cmds = ["lxc delete  " + n for n in to_delete]
-    do('delete-' + tag, cmds, 0, backend, opts)
+    do_cmds('delete-' + tag, cmds, count, backend, opts)
 
 
 def wait_for_cloudinit_done(container):
@@ -183,50 +184,62 @@ def wait_for_cloudinit_done(container):
         break
 
 
-def do_pause(to_pause, backend, opts):
-    cmds = ["lxc pause " + to_pause]
-    do('pause', cmds, 0, backend, opts)
+def do_pause(to_pause, count, backend, opts):
+    cmds = ["lxc pause " + name for name in to_pause]
+    do_cmds('pause', cmds, count, backend, opts, record=False)
 
 
 def do_copy(source, count, backend, opts):
     tgtfmt = "copy-{i}-" + backend
     cmdfmt = "lxc copy  " + source + " {target}"
-    return do('copy', [(cmdfmt, tgtfmt)], count, backend, opts)
+    return do_fmt('copy', cmdfmt, tgtfmt, count, backend, opts)
 
 
 def do_snapshot(source, count, backend, opts):
     tgtfmt = "snap-{i}-" + backend
     cmdfmt = "lxc snapshot  " + source + " {target}"
-    snaps = do('snapshot', [(cmdfmt, tgtfmt)], count, backend, opts)
+    snaps = do_fmt('snapshot', cmdfmt, tgtfmt, count, backend, opts)
     return [source + "/" + snap for snap in snaps]
 
 
-def do(batchname, cmdfmts, count, backend, opts):
+# do a formatted command 'nexec' times.
+def do_fmt(batchname, cmdfmt, tgtfmt, count, backend, opts,
+           nexec=None, record=True):
+    cmds = []
+    tgts = []
+    if nexec is None:
+        nexec = count
+    for i in range(nexec):
+        tgt = tgtfmt.format(i=i)
+        cmd = cmdfmt.format(target=tgt, backend=backend)
+        cmds.append(cmd)
+        tgts.append(tgt)
+
+    completed = do_cmds(batchname, cmds, count, backend, opts,
+                        targets=tgts, record=record)
+    return completed
+
+
+# do a list of things, ignoring but recording N
+def do_cmds(batchname, cmds, count, backend, opts, targets=None,
+            record=True):
 
     def log(s):
         if opts.verbose:
             print(s)
 
     recs = []
-    cmds = []
     completed_tgts = []
-    if count > 0:
-        if len(cmdfmts) != 1:
-            print("Whoops, expected a single cmd fmt, got " + cmdfmts)
-            sys.exit()
-        for i in range(count):
-            cmdfmt, tgtfmt = cmdfmts[0]
-            tgt = tgtfmt.format(i=i)
-            cmd = cmdfmt.format(target=tgt, backend=backend)
-            cmds.append((cmd, tgt))
-    else:
-        cmds = [(c, "") for c in cmdfmts]
+    if targets is None:
+        targets = cmds
+
+    assert(len(cmds) == len(targets))
 
     start_mem = get_free_mem()
     start_load = get_load()
     start_disk = get_disk_usage()
     start_all = time.time()
-    for cmd, tgt in cmds:
+    for cmd, tgt in zip(cmds, targets):
         start = time.time()
         log("+ " + str(cmd))
         try:
@@ -245,8 +258,9 @@ def do(batchname, cmdfmts, count, backend, opts):
     load_increase = get_load() - start_load
     disk_increase = get_disk_usage() - start_disk
 
-    record_batch(batchname, time_all, recs, count, backend,
-                 mem_increase, load_increase, disk_increase, opts)
+    if record:
+        record_batch(batchname, time_all, recs, count, backend,
+                     mem_increase, load_increase, disk_increase, opts)
     return completed_tgts
 
 
@@ -313,37 +327,49 @@ def teardown_lxd(tmp_dir, lxd_proc, opts):
 
 def run_bench(opts):
     for backend in opts.backends.split(','):
-        print("# backend = {}".format(backend))
+        print("* backend = {}".format(backend))
         tmp_dir = mkdtemp(prefix="lxd_tmp_dir")
         call("chmod +x {}".format(tmp_dir), shell=True)
         binfo = setup_backend(backend, tmp_dir, opts)
-        print(" check backend is set up:")
+        print("** check backend is set up:")
         call("lxc finger --debug", shell=True)
         import_image(opts.image)
         try:
             for count in opts.counts.split(','):
                 count = int(count)
-                print("## N = {}".format(count))
+                print("** N = {}".format(count))
 
-                print("launching {} containers".format(count))
-                call("lxc image list", shell=True)
+                print("*** launching {} containers".format(count))
                 launched = do_launch(count, backend, opts)
-                print("listing")
-                do_list(0, "containers", backend, opts)
-                print("deleting")
-                do_delete(launched, 'containers', backend, opts)
+                print("*** listing")
+                do_list(count, "containers", backend, opts)
+                print("*** deleting")
+                do_delete(launched, 'containers', count, backend, opts)
 
-                src = do_launch(1, backend, opts)[0]
+                launched = do_launch(1, backend, opts, record=False)
+                src = launched[0]
                 if 'ubuntu' in opts.image:
                     wait_for_cloudinit_done(src)
-                do_pause(src, backend, opts)
+                print("*** pausing " + src)
+                do_pause([src], count, backend, opts)
+                print("*** making {} copies".format(count))
                 copies = do_copy(src, count, backend, opts)
-                do_list(0, "copies", backend, opts)
-                do_delete(copies, 'copies', backend, opts)
+                do_list(count, "copies", backend, opts)
+                print("*** deleting the copies")
+                do_delete(copies, 'copies', count, backend, opts)
 
+                print("*** making {} snapshots".format(count))
                 do_snapshot(src, count, backend, opts)
+                print("*** cleaning up {} and snaps".format(src))
                 # deleting src will delete the snapshots too:
-                do_delete([src], 'container-with-snaps', backend, opts)
+                do_delete([src], 'container-with-snaps', count, backend, opts)
+                print()
+        except:
+            print("Stopped because of an error. Go clean me up, sorry.")
+            print(traceback.format_exc())
+            print("try LXD_DIR={}/lxd_dir lxc list".format(tmp_dir))
+            read("done poking? ")
+
         finally:
             delete_image()
             teardown_backend(backend, tmp_dir, binfo, opts)
@@ -356,7 +382,7 @@ def show_report(the_id, csv=False):
     run_rows = dbc.fetchall()
     print(tabulate.tabulate(run_rows))
     dbc.execute("SELECT * FROM timings WHERE run_id = {} "
-                "ORDER BY count, batch".format(the_id))
+                "ORDER BY batch, count, numrecs".format(the_id))
     rows = dbc.fetchall()
     headers = ['batch', 'backend', 'numrecs', 'count',
                'total_time', 'avg_time', 'mem_inc', 'load_inc', 'disk_inc',
@@ -432,9 +458,6 @@ if __name__ == "__main__":
         try:
             run_bench(opts)
             show_report(run_id)
-        except Exception as e:
-            print("Stopped because of an error. Go clean me up, sorry")
-            print(traceback.format_exc())
         finally:
             db.commit()
             db.close()
