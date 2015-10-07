@@ -73,13 +73,21 @@ def setup_backend(backend, tmp_dir, opts):
 
     if backend == "lvm":
         lxd_proc = spawn_lxd(tmp_dir)
-        try:
-            check_output("sudo -E {}/lxd-setup-lvm-storage "
-                         "-s 10G".format(LXD_SCRIPTS_DIR),
-                         shell=True, stderr=STDOUT, env=os.environ.copy())
-        except CalledProcessError as e:
-            print("output: " + e.output.decode())
-            raise e
+        if opts.blockdev == "loop":
+            try:
+                check_output("sudo -E {}/lxd-setup-lvm-storage "
+                             "-s 10G".format(LXD_SCRIPTS_DIR),
+                             shell=True, stderr=STDOUT, env=os.environ.copy())
+            except CalledProcessError as e:
+                print("output: " + e.output.decode())
+                raise e
+        else:
+            check_output("sudo pvcreate {}".format(opts.blockdev), shell=True)
+            check_output("sudo vgcreate LXDStorage {}".format(opts.blockdev),
+                         shell=True)
+            check_output("lxc config set storage.lvm_vg_name LXDStorage",
+                         shell=True)
+
         return dict(lxd_proc=lxd_proc)
 
     elif backend in ['btrfs', 'zfs']:
@@ -120,9 +128,14 @@ def teardown_backend(backend, tmp_dir, info, opts):
         teardown_lxd(tmp_dir, info['lxd_proc'], opts)
 
     elif backend == "lvm":
-        check_output("sudo -E {}/lxd-setup-lvm-storage "
-                     "--destroy".format(LXD_SCRIPTS_DIR),
-                     shell=True)
+        if opts.blockdev == 'loop':
+            check_output("sudo -E {}/lxd-setup-lvm-storage "
+                         "--destroy".format(LXD_SCRIPTS_DIR),
+                         shell=True)
+        else:
+            check_output("sudo vgremove -f LXDStorage", shell=True)
+            check_output("sudo pvremove -f {}".format(opts.blockdev), shell=True)
+
         teardown_lxd(tmp_dir, info['lxd_proc'], opts)
 
     elif backend in ['btrfs', 'zfs']:
