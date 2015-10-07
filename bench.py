@@ -78,28 +78,35 @@ def setup_backend(backend, tmp_dir, opts):
             raise e
         return dict(lxd_proc=lxd_proc)
 
-    elif backend == 'btrfs':
+    elif backend in ['btrfs', 'zfs']:
         backingfile = None
         if opts.blockdev == "loop":
-            backingfile = 'btrfs.img'
+            backingfile = backend + '.img'
             check_output("truncate -s {} {}".format('10G', backingfile),
                          shell=True)
             dev = check_output("sudo losetup -f",
                                shell=True).decode().strip()
-            check_output("sudo losetup {} btrfs.img".format(dev),
+            check_output("sudo losetup {} {}".format(dev, backingfile),
                          shell=True)
         else:
             dev = opts.blockdev
-        check_output("sudo mkfs.btrfs -m single {}".format(dev),
-                     shell=True)
-        check_output("sudo mount {} {}".format(dev, lxd_dir),
-                     shell=True)
-        lxd_proc = spawn_lxd(tmp_dir)
+
+        if backend == 'btrfs':
+            check_output("sudo mkfs.btrfs -m single {}".format(dev),
+                         shell=True)
+            check_output("sudo mount {} {}".format(dev, lxd_dir),
+                         shell=True)
+            lxd_proc = spawn_lxd(tmp_dir)
+        else:
+            check_output("sudo zpool create -m none "
+                         "LXDStoragePool {}".format(dev),
+                         shell=True)
+            lxd_proc = spawn_lxd(tmp_dir)
+            check_output("lxc config set storage.zfs_pool_name LXDStoragePool",
+                         shell=True)
+
         return dict(lxd_proc=lxd_proc, lxd_dir=lxd_dir,
                     dev=dev, backingfile=backingfile)
-
-    elif backend == 'zfs':
-        pass
     else:
         raise Exception("Unknown backend " + backend)
 
@@ -107,14 +114,22 @@ def setup_backend(backend, tmp_dir, opts):
 def teardown_backend(backend, tmp_dir, info, opts):
     if backend == "dir":
         teardown_lxd(tmp_dir, info['lxd_proc'], opts)
+
     elif backend == "lvm":
         check_output("sudo -E {}/lxd-setup-lvm-storage "
                      "--destroy".format(LXD_SCRIPTS_DIR),
                      shell=True)
         teardown_lxd(tmp_dir, info['lxd_proc'], opts)
-    elif backend == 'btrfs':
-        teardown_lxd(tmp_dir, info['lxd_proc'], opts)
-        check_output("sudo umount {}".format(info['lxd_dir']), shell=True)
+
+    elif backend in ['btrfs', 'zfs']:
+        if backend == 'btrfs':
+            teardown_lxd(tmp_dir, info['lxd_proc'], opts)
+            check_output("sudo umount {}".format(info['lxd_dir']), shell=True)
+        else:
+            check_output("lxc config unset storage.zfs_pool_name", shell=True)
+            check_output("sudo zpool destroy LXDStoragePool", shell=True)
+            teardown_lxd(tmp_dir, info['lxd_proc'], opts)
+
         if opts.blockdev == 'loop':
             check_output("sudo losetup -d {}".format(info['dev']), shell=True)
             check_output("sudo rm -f {}".format(info['backingfile']),
@@ -261,7 +276,7 @@ def spawn_lxd(temp_dir):
         cmd = "lxc finger "
         rv = call(cmd, shell=True)
         time.sleep(1.5)
-    call("lxc finger --debug", shell=True)
+
     # check_call("lxc config  "
     #            " set core.https_address 127.0.0.1:22222",
     #            shell=True)
@@ -299,6 +314,8 @@ def run_bench(opts):
         tmp_dir = mkdtemp(prefix="lxd_tmp_dir")
         call("chmod +x {}".format(tmp_dir), shell=True)
         binfo = setup_backend(backend, tmp_dir, opts)
+        print(" check backend is set up:")
+        call("lxc finger --debug", shell=True)
         import_image(opts.image)
         try:
             for count in opts.counts.split(','):
