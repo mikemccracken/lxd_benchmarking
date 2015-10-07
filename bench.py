@@ -273,7 +273,7 @@ def record_batch(name, time_all, recs, count, backend, mem_increase,
                 (name, backend, len(recs), count, time_all, recavg,
                  mem_increase, load_increase, disk_increase,
                  opts.image, run_id))
-
+    db.commit()
 
 def spawn_lxd(temp_dir):
     lxd_config = os.path.join(temp_dir, 'lxd_config')
