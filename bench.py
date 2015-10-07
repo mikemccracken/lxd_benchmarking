@@ -42,21 +42,25 @@ def get_disk_usage():
 
 
 def import_image(image):
-    print("importing image '{}'".format(image))
-    try:
-        check_output("{scriptpath}/lxd-images import {img} "
-                     " --alias {img}".format(scriptpath=LXD_SCRIPTS_DIR,
-                                             img=image), shell=True,
-                     stderr=STDOUT)
-    except CalledProcessError as e:
-        print("out, \n{}".format(e.output))
-        raise e
+    if os.path.exists(image):
+        print("importing image from file {}".format(image))
+        call("lxc image import meta-{0} {0} --alias img".format(image),
+             shell=True)
+    else:
+        print("importing image '{}'".format(image))
+        try:
+            check_output("{scriptpath}/lxd-images import {image} "
+                         " --alias img".format(scriptpath=LXD_SCRIPTS_DIR,
+                                               image=image),
+                         shell=True, stderr=STDOUT)
+        except CalledProcessError as e:
+            print("out, \n{}".format(e.output))
+            raise e
     print("done importing image '{}'".format(image))
 
 
-def delete_image(image):
-    check_output("lxc image  "
-                 "delete {img}".format(img=image), shell=True)
+def delete_image():
+    check_output("lxc image delete img", shell=True)
 
 
 def setup_backend(backend, tmp_dir, opts):
@@ -138,14 +142,13 @@ def teardown_backend(backend, tmp_dir, info, opts):
 
 def do_launch(count, backend, opts):
     tgtfmt = "ctr-{i}-" + backend
-    cmdfmt = "lxc launch  " + opts.image + " {target}"
+    cmdfmt = "lxc launch img {target}"
     return do('launch', [(cmdfmt, tgtfmt)], count, backend, opts)
 
 
 def do_list(count, tag, backend, opts):
-    cmdfmt = "lxc list "
-    tgtfmt = ""
-    return do('list-' + tag, [(cmdfmt, tgtfmt)], count, backend, opts)
+    cmds = ["lxc list"]
+    return do('list-' + tag, cmds, 0, backend, opts)
 
 
 def do_delete(to_delete, tag, backend, opts):
@@ -225,7 +228,7 @@ def do(batchname, cmdfmts, count, backend, opts):
     start_all = time.time()
     for cmd, tgt in cmds:
         start = time.time()
-        log("+ " + cmd)
+        log("+ " + str(cmd))
         try:
             check_output(cmd, shell=True, stderr=STDOUT)
             completed_tgts.append(tgt)
@@ -323,25 +326,26 @@ def run_bench(opts):
                 print("## N = {}".format(count))
 
                 print("launching {} containers".format(count))
+                call("lxc image list", shell=True)
                 launched = do_launch(count, backend, opts)
                 print("listing")
-                do_list(count, "containers", backend, opts)
+                do_list(0, "containers", backend, opts)
                 print("deleting")
                 do_delete(launched, 'containers', backend, opts)
 
                 src = do_launch(1, backend, opts)[0]
-                if opts.image == 'ubuntu':
+                if 'ubuntu' in opts.image:
                     wait_for_cloudinit_done(src)
                 do_pause(src, backend, opts)
                 copies = do_copy(src, count, backend, opts)
-                do_list(count, "copies", backend, opts)
+                do_list(0, "copies", backend, opts)
                 do_delete(copies, 'copies', backend, opts)
 
                 do_snapshot(src, count, backend, opts)
                 # deleting src will delete the snapshots too:
                 do_delete([src], 'container-with-snaps', backend, opts)
         finally:
-            delete_image(opts.image)
+            delete_image()
             teardown_backend(backend, tmp_dir, binfo, opts)
             if not opts.keep:
                 call("sudo rm -rf {}".format(tmp_dir), shell=True)
@@ -400,7 +404,8 @@ if __name__ == "__main__":
                        help="a comma separated list of backends to use.",
                        default="lvm,zfs,dir,btrfs")
     run_p.add_argument("--image", default='ubuntu',
-                       help="Image hash or alias to use")
+                       help="image to use - one of 'ubuntu', 'busybox', or a "
+                       "filename of an exported image tarball")
     run_p.add_argument("-m", dest='message', default="",
                        help="message about run")
     run_p.add_argument("--keep", default=False,
