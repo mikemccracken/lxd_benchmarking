@@ -24,8 +24,11 @@ dbc = None
 run_id = 0
 
 
-def get_free_mem():
-    free = check_output("free -m | awk '/Mem:/ { print $4 }'", shell=True)
+def get_free_mem(include_cached=False):
+    fmt = "$4"
+    if include_cached:
+        fmt += "+$7"
+    free = check_output("free -m | awk '/Mem:/ { print " + fmt + "  }'", shell=True)
     return int(free.decode())
 
 
@@ -267,6 +270,9 @@ def do_cmds(batchname, cmds, count, backend, opts, targets=None,
         log("=> OK")
 
         recs.append((cmd, time.time() - start))
+        if get_free_mem(include_cached=True) <= opts.mem_threshold:
+            print("stopping after {}, ran out of memory".format(len(recs)))
+            break
     time_all = time.time() - start_all
     mem_increase = get_free_mem() - start_mem
     load_increase = get_load() - start_load
@@ -453,6 +459,10 @@ if __name__ == "__main__":
                        help="do not tear down lxd dirs")
     run_p.add_argument("--blockdev", default='loop',
                        help="block device to use for storage backends")
+    run_p.add_argument("--mem-threshold", dest="mem_threshold",
+                       default=512, type=int,
+                       help="Stop a trial before we have less than this much "
+                       "free + cached RAM in MB")
     show_p = sps.add_parser('show', help='show runs')
     show_p.add_argument("--run", dest="run_id", help="id to show",
                         default=None)
