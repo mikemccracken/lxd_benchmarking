@@ -447,18 +447,18 @@ def show_report(the_id, csv=False, showall=False):
         fmt = tabulate.simple_separated_format(",")
     else:
         fmt = 'simple'
-    print(tabulate.tabulate(rows, headers=headers, tablefmt=fmt,
-                            floatfmt='.3g'))
 
     if not showall:
-        return
+        print(tabulate.tabulate(rows, headers=headers, tablefmt=fmt,
+                                floatfmt='.3g'))
 
     for row in rows:
-        print()
+        print("\n\n")
         print(tabulate.tabulate([row], headers=headers, tablefmt=fmt,
                                 floatfmt='.3g'))
         id = row[0]
         dbc.execute("SELECT * FROM recs WHERE timings_id = ?", (id,))
+        print("\n")
         print(tabulate.tabulate(dbc.fetchall(), headers=['cmd', 'dur', 'id'],
                                 floatfmt='.3g'))
 
