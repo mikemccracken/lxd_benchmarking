@@ -271,6 +271,7 @@ def do_cmds(batchname, cmds, count, backend, opts, targets=None,
     start_load = get_load()
     start_disk = get_disk_usage()
     start_all = time.time()
+    last_stoptime = None
     for cmd, tgt in zip(cmds, targets):
         start = time.time()
         log("+ " + str(cmd))
@@ -281,11 +282,12 @@ def do_cmds(batchname, cmds, count, backend, opts, targets=None,
             print("error: {}".format(e))
             print("output: " + e.output.decode())
             raise Exception("Fatal ERROR")
-
-        dur = time.time() - start
+        last_stoptime = time.time()
+        dur = last_stoptime - start
         log("=> OK, {:2f} sec".format(dur))
 
         recs.append((cmd, dur))
+
         if get_free_mem(include_cached=True) <= opts.mem_threshold:
             print("stopping after {}, ran out of memory".format(len(recs)))
             break
@@ -295,7 +297,7 @@ def do_cmds(batchname, cmds, count, backend, opts, targets=None,
         if sigusr_received:
             print("stopping after {}, user asked to halt.".format(len(recs)))
             break
-    time_all = time.time() - start_all
+    time_all = last_stoptime - start_all
     mem_increase = get_free_mem() - start_mem
     load_increase = get_load() - start_load
     disk_increase = get_disk_usage() - start_disk
