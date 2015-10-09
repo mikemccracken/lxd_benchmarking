@@ -28,7 +28,8 @@ def get_free_mem(include_cached=False):
     fmt = "$4"
     if include_cached:
         fmt += "+$7"
-    free = check_output("free -m | awk '/Mem:/ { print " + fmt + "  }'", shell=True)
+    free = check_output("free -m | awk '/Mem:/ { print " + fmt + "  }'",
+                        shell=True)
     return int(free.decode())
 
 
@@ -137,7 +138,8 @@ def teardown_backend(backend, tmp_dir, info, opts):
                          shell=True)
         else:
             check_output("sudo vgremove -f LXDStorage", shell=True)
-            check_output("sudo pvremove -f {}".format(opts.blockdev), shell=True)
+            check_output("sudo pvremove -f {}".format(opts.blockdev),
+                         shell=True)
 
         teardown_lxd(tmp_dir, info['lxd_proc'], opts)
 
@@ -156,6 +158,7 @@ def teardown_backend(backend, tmp_dir, info, opts):
                          shell=True)
         else:
             check_output("sudo wipefs -a {}".format(info['dev']), shell=True)
+
 
 def do_launch(count, backend, opts, record=True):
     tgtfmt = "ctr-{i}-" + backend
@@ -293,6 +296,7 @@ def record_batch(name, time_all, recs, count, backend, mem_increase,
                  mem_increase, load_increase, disk_increase,
                  opts.image, run_id))
     db.commit()
+
 
 def spawn_lxd(temp_dir):
     lxd_config = os.path.join(temp_dir, 'lxd_config')
