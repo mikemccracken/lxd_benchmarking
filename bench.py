@@ -310,10 +310,18 @@ def record_batch(name, time_all, recs, count, backend, mem_increase,
                  load_increase, disk_increase, opts):
     recavg = sum([t for _, t in recs]) / len(recs)
 
-    dbc.execute("INSERT INTO timings VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (name, backend, len(recs), count, time_all, recavg,
-                 mem_increase, load_increase, disk_increase,
-                 opts.image, run_id))
+    c = dbc.execute("INSERT INTO timings(batch, backend, numrecs, count, "
+                    "total_time, avg_time, mem_increase, load_increase, "
+                    "disk_increase, image, run_id ) VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (name, backend, len(recs), count, time_all, recavg,
+                     mem_increase, load_increase, disk_increase,
+                     opts.image, run_id))
+    timings_id = c.lastrowid
+    for cmd, dur in recs:
+        dbc.execute("INSERT INTO recs(cmd, duration, timings_id) VALUES "
+                    "(?, ?, ?)", (cmd, dur, timings_id))
+
     db.commit()
 
 
@@ -406,7 +414,8 @@ def run_bench(opts):
                     do_snapshot(src, count, backend, opts)
                     print("*** cleaning up {} and snaps".format(src))
                     # deleting src will delete the snapshots too:
-                    do_delete([src], 'container-with-snaps', count, backend, opts)
+                    do_delete([src], 'container-with-snaps', count, backend,
+                              opts)
                 print("*** check that we're clean:")
                 call("lxc list", shell=True)
         except:
@@ -422,14 +431,14 @@ def run_bench(opts):
                 call("sudo rm -rf {}".format(tmp_dir), shell=True)
 
 
-def show_report(the_id, csv=False):
+def show_report(the_id, csv=False, showall=False):
     dbc.execute("SELECT * FROM runs where id = ?", (the_id, ))
     run_rows = dbc.fetchall()
     print(tabulate.tabulate(run_rows))
     dbc.execute("SELECT * FROM timings WHERE run_id = {} "
                 "ORDER BY batch, count, numrecs".format(the_id))
     rows = dbc.fetchall()
-    headers = ['batch', 'backend', 'numrecs', 'count',
+    headers = ['id', 'batch', 'backend', 'numrecs', 'count',
                'total_time', 'avg_time', 'mem_inc', 'load_inc', 'disk_inc',
                'image', 'runid']
     if csv:
@@ -438,6 +447,18 @@ def show_report(the_id, csv=False):
         fmt = 'simple'
     print(tabulate.tabulate(rows, headers=headers, tablefmt=fmt,
                             floatfmt='.3g'))
+
+    if not showall:
+        return
+
+    for row in rows:
+        print()
+        print(tabulate.tabulate([row], headers=headers, tablefmt=fmt,
+                                floatfmt='.3g'))
+        id = row[0]
+        dbc.execute("SELECT * FROM recs WHERE timings_id = ?", (id,))
+        print(tabulate.tabulate(dbc.fetchall(), headers=['cmd', 'dur', 'id'],
+                                floatfmt='.3g'))
 
 
 def show_runs():
@@ -454,10 +475,14 @@ def init_db():
     dbc.execute("CREATE TABLE if not exists runs "
                 "(id integer primary key, argv text, date date, message text)")
     dbc.execute("CREATE TABLE if not exists timings "
-                "(batch text, backend text, numrecs int, count int, "
+                "(id integer primary key, "
+                "batch text, backend text, numrecs int, count int, "
                 "total_time real, avg_time real, "
                 "mem_increase int, load_increase real, disk_increase int, "
                 "image text, run_id int)")
+    dbc.execute("CREATE TABLE if not exists recs "
+                "(id integer primary key, cmd text, duration real, "
+                " timings_id int) ")
 
 
 if __name__ == "__main__":
@@ -524,6 +549,6 @@ if __name__ == "__main__":
         if opts.run_id is None:
             show_runs()
         else:
-            show_report(opts.run_id, opts.csv)
+            show_report(opts.run_id, csv=opts.csv, showall=opts.showall)
 
     print("Done, OK")
