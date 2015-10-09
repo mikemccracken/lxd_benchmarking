@@ -3,6 +3,7 @@
 from argparse import ArgumentParser
 import os
 import shutil
+import signal
 import sys
 from subprocess import (check_output, STDOUT, CalledProcessError,
                         Popen, call)
@@ -22,6 +23,14 @@ LXD_SCRIPTS_DIR = os.path.join(LXD_SRC_DIR, "scripts")
 db = None
 dbc = None
 run_id = 0
+
+sigusr_received = False
+
+
+def handle_sigusr1(signum, frame):
+    global sigusr_received
+    print("got stop signal.")
+    sigusr_received = True
 
 
 def get_free_mem(include_cached=False):
@@ -243,6 +252,9 @@ def do_fmt(batchname, cmdfmt, tgtfmt, count, backend, opts,
 # do a list of things, ignoring but recording N
 def do_cmds(batchname, cmds, count, backend, opts, targets=None,
             record=True):
+    if sigusr_received:
+        print("skipping.")
+        return []
 
     def log(s):
         if opts.verbose:
@@ -270,11 +282,18 @@ def do_cmds(batchname, cmds, count, backend, opts, targets=None,
             print("output: " + e.output.decode())
             raise Exception("Fatal ERROR")
 
-        log("=> OK")
+        dur = time.time() - start
+        log("=> OK, {:2f} sec".format(dur))
 
-        recs.append((cmd, time.time() - start))
+        recs.append((cmd, dur))
         if get_free_mem(include_cached=True) <= opts.mem_threshold:
             print("stopping after {}, ran out of memory".format(len(recs)))
+            break
+        if dur > opts.duration_threshold:
+            print("stopping after {}, got impatient".format(len(recs)))
+            break
+        if sigusr_received:
+            print("stopping after {}, user asked to halt.".format(len(recs)))
             break
     time_all = time.time() - start_all
     mem_increase = get_free_mem() - start_mem
@@ -371,22 +390,23 @@ def run_bench(opts):
                 do_delete(launched, 'containers', count, backend, opts)
 
                 launched = do_launch(1, backend, opts, record=False)
-                src = launched[0]
-                if 'ubuntu' in opts.image:
-                    wait_for_cloudinit_done(src)
-                print("*** pausing " + src)
-                do_pause([src], count, backend, opts)
-                print("*** making {} copies".format(count))
-                copies = do_copy(src, count, backend, opts)
-                do_list(count, "copies", backend, opts)
-                print("*** deleting the copies")
-                do_delete(copies, 'copies', count, backend, opts)
+                if len(launched) > 0:
+                    src = launched[0]
+                    if 'ubuntu' in opts.image:
+                        wait_for_cloudinit_done(src)
+                    print("*** pausing " + src)
+                    do_pause([src], count, backend, opts)
+                    print("*** making {} copies".format(count))
+                    copies = do_copy(src, count, backend, opts)
+                    do_list(count, "copies", backend, opts)
+                    print("*** deleting the copies")
+                    do_delete(copies, 'copies', count, backend, opts)
 
-                print("*** making {} snapshots".format(count))
-                do_snapshot(src, count, backend, opts)
-                print("*** cleaning up {} and snaps".format(src))
-                # deleting src will delete the snapshots too:
-                do_delete([src], 'container-with-snaps', count, backend, opts)
+                    print("*** making {} snapshots".format(count))
+                    do_snapshot(src, count, backend, opts)
+                    print("*** cleaning up {} and snaps".format(src))
+                    # deleting src will delete the snapshots too:
+                    do_delete([src], 'container-with-snaps', count, backend, opts)
                 print("*** check that we're clean:")
                 call("lxc list", shell=True)
         except:
@@ -467,17 +487,26 @@ if __name__ == "__main__":
                        default=512, type=int,
                        help="Stop a trial before we have less than this much "
                        "free + cached RAM in MB")
+    run_p.add_argument("--runtime-threshold", dest="duration_threshold",
+                       default=600, type=int,
+                       help="Stop a trial after this many seconds")
+
     show_p = sps.add_parser('show', help='show runs')
     show_p.add_argument("--run", dest="run_id", help="id to show",
                         default=None)
     show_p.add_argument("--csv", action='store_true',
                         help="Show results as csv")
+    show_p.add_argument("-a", action='store_true',
+                        dest='showall', help="show all recs")
     opts = p.parse_args(sys.argv[1:])
 
     init_db()
 
     if opts.subcommand_name == 'run':
 
+        signal.signal(signal.SIGUSR1, handle_sigusr1)
+        print("Running. Use 'kill -USR1 {}' to stop a "
+              "batch".format(os.getpid()))
         dbc.execute("INSERT INTO runs(argv, date, message) "
                     "VALUES(?, datetime('now'), ?)",
                     (str(sys.argv[1:]), opts.message))
