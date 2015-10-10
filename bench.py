@@ -451,6 +451,7 @@ def show_report(the_id, csv=False, showall=False):
     if not showall:
         print(tabulate.tabulate(rows, headers=headers, tablefmt=fmt,
                                 floatfmt='.3g'))
+        return
 
     for row in rows:
         print("\n\n")
