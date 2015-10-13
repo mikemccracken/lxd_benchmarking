@@ -279,9 +279,12 @@ def do_cmds(batchname, cmds, count, backend, opts, targets=None,
             check_output(cmd, shell=True, stderr=STDOUT)
             completed_tgts.append(tgt)
         except CalledProcessError as e:
+            # if run failed, do not keep going and do not record a timing
             print("error: {}".format(e))
             print("output: " + e.output.decode())
-            raise Exception("Fatal ERROR")
+            print("Stopping run after {} due to the above error.".format(len(recs)))
+            break
+
         last_stoptime = time.time()
         dur = last_stoptime - start
         log("=> OK, {:2f} sec".format(dur))
@@ -381,7 +384,7 @@ def teardown_lxd(tmp_dir, lxd_proc, opts):
 def run_bench(opts):
     for backend in opts.backends.split(','):
         print("* backend = {}".format(backend))
-        tmp_dir = mkdtemp(prefix="lxd_tmp_dir")
+        tmp_dir = mkdtemp(prefix=opts.run_dir + "lxd_tmp_")
         call("chmod +x {}".format(tmp_dir), shell=True)
         binfo = setup_backend(backend, tmp_dir, opts)
         print("** check backend is set up:")
@@ -518,7 +521,8 @@ if __name__ == "__main__":
     run_p.add_argument("--runtime-threshold", dest="duration_threshold",
                        default=600, type=int,
                        help="Stop a trial after this many seconds")
-
+    run_p.add_argument('--dir', dest='run_dir', default="/tmp/",
+                       help="base directory to store temp per-backend lxd dirs.")
     show_p = sps.add_parser('show', help='show runs')
     show_p.add_argument("--run", dest="run_id", help="id to show",
                         default=None)
