@@ -56,8 +56,13 @@ def get_disk_usage():
 
 def import_image(image):
     if os.path.exists(image):
-        print("importing image from file {}".format(image))
-        call("lxc image import meta-{0} {0} --alias img".format(image),
+        imagefile = os.path.abspath(image)
+        print("importing image from file {}".format(imagefile))
+        path, fname = os.path.split(imagefile)
+        if not fname.startswith('meta'):
+            fname = "meta-" + fname
+        fname = os.path.join(path, fname)
+        call("lxc image import {0} {0} --alias img".format(fname),
              shell=True)
     else:
         print("importing image '{}'".format(image))
