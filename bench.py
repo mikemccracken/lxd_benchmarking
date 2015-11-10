@@ -59,10 +59,10 @@ def import_image(image):
         imagefile = os.path.abspath(image)
         print("importing image from file {}".format(imagefile))
         path, fname = os.path.split(imagefile)
-        if not fname.startswith('meta'):
-            fname = "meta-" + fname
-        fname = os.path.join(path, fname)
-        call("lxc image import {0} {0} --alias img".format(fname),
+        if fname.startswith('meta'):
+            fname = fname[5:]
+        call("lxc image import {0}/meta-{1} {0}/{1} --alias img".format(path,
+                                                                        fname),
              shell=True)
     else:
         print("importing image '{}'".format(image))
