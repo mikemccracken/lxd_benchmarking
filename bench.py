@@ -515,7 +515,7 @@ if __name__ == "__main__":
                        "filename of an exported image tarball")
     run_p.add_argument("-m", dest='message', default="",
                        help="message about run")
-    run_p.add_argument("--keep", default=False,
+    run_p.add_argument("--keep", default=False, action="store_true",
                        help="do not tear down lxd dirs")
     run_p.add_argument("--blockdev", default='loop',
                        help="block device to use for storage backends")
