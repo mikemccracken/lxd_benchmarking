@@ -112,7 +112,7 @@ def setup_backend(backend, tmp_dir, opts):
         backingfile = None
         if opts.blockdev == "loop":
             backingfile = backend + '.img'
-            check_output("truncate -s {} {}".format('10G', backingfile),
+            check_output("truncate -s {} {}".format('50G', backingfile),
                          shell=True)
             dev = check_output("sudo losetup -f",
                                shell=True).decode().strip()
