@@ -344,9 +344,10 @@ def spawn_lxd(temp_dir):
     for fn in ['server.crt', 'server.key']:
         shutil.copyfile(os.path.join(LXD_SRC_DIR, 'test', 'deps', fn),
                         os.path.join(temp_dir, fn))
+    out = open("{}/debug.log".format(temp_dir), 'wb')
     lxd_proc = Popen(["sudo", "-E", "{}/bin/lxd".format(os.environ["GOPATH"]),
                       "--debug", "--group", "lxd", "--logfile",
-                      "{}/lxd.log".format(lxd_dir)])
+                      "{}/lxd.log".format(lxd_dir)], stdout=out, stderr=STDOUT)
 
     print("waiting for spawned lxd")
     rv = -1
