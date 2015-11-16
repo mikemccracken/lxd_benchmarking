@@ -188,7 +188,7 @@ def do_list(count, tag, backend, opts):
 
 def do_delete(to_delete, tag, count, backend, opts):
     cmds = ["lxc delete  " + n for n in to_delete]
-    do_cmds('delete-' + tag, cmds, count, backend, opts)
+    return do_cmds('delete-' + tag, cmds, count, backend, opts)
 
 
 def wait_for_cloudinit_done(container):
@@ -220,7 +220,7 @@ def wait_for_cloudinit_done(container):
 
 def do_pause(to_pause, count, backend, opts):
     cmds = ["lxc pause " + name for name in to_pause]
-    do_cmds('pause', cmds, count, backend, opts, record=False)
+    return do_cmds('pause', cmds, count, backend, opts, record=False)
 
 
 def do_copy(source, count, backend, opts):
@@ -232,8 +232,8 @@ def do_copy(source, count, backend, opts):
 def do_snapshot(source, count, backend, opts):
     tgtfmt = "snap-{i}-" + backend
     cmdfmt = "lxc snapshot  " + source + " {target}"
-    snaps = do_fmt('snapshot', cmdfmt, tgtfmt, count, backend, opts)
-    return [source + "/" + snap for snap in snaps]
+    snaps, err = do_fmt('snapshot', cmdfmt, tgtfmt, count, backend, opts)
+    return ([source + "/" + snap for snap in snaps], err)
 
 
 # do a formatted command 'nexec' times.
@@ -249,9 +249,8 @@ def do_fmt(batchname, cmdfmt, tgtfmt, count, backend, opts,
         cmds.append(cmd)
         tgts.append(tgt)
 
-    completed = do_cmds(batchname, cmds, count, backend, opts,
+    return do_cmds(batchname, cmds, count, backend, opts,
                         targets=tgts, record=record)
-    return completed
 
 
 # do a list of things, ignoring but recording N
@@ -271,7 +270,7 @@ def do_cmds(batchname, cmds, count, backend, opts, targets=None,
         targets = cmds
 
     assert(len(cmds) == len(targets))
-
+    err = False
     start_mem = get_free_mem()
     start_load = get_load()
     start_disk = get_disk_usage()
@@ -288,6 +287,7 @@ def do_cmds(batchname, cmds, count, backend, opts, targets=None,
             print("error: {}".format(e))
             print("output: " + e.output.decode())
             print("Stopping run after {} due to the above error.".format(len(recs)))
+            err = True
             break
 
         last_stoptime = time.time()
@@ -313,7 +313,7 @@ def do_cmds(batchname, cmds, count, backend, opts, targets=None,
     if record:
         record_batch(batchname, time_all, recs, count, backend,
                      mem_increase, load_increase, disk_increase, opts)
-    return completed_tgts
+    return completed_tgts, err
 
 
 def record_batch(name, time_all, recs, count, backend, mem_increase,
@@ -402,31 +402,55 @@ def run_bench(opts):
                 print("** N = {}".format(count))
 
                 print("*** launching {} containers".format(count))
-                launched = do_launch(count, backend, opts)
+                launched, err = do_launch(count, backend, opts)
+                if err:
+                    raise Exception("error launching")
                 print("*** listing")
-                do_list(count, "containers", backend, opts)
+                _, err = do_list(count, "containers", backend, opts)
+                if err:
+                    raise Exception("error listing")
+
                 print("*** deleting")
-                do_delete(launched, 'containers', count, backend, opts)
+                _, err = do_delete(launched, 'containers', count, backend, opts)
+                if err:
+                    raise Exception("error deleting")
 
-                launched = do_launch(1, backend, opts, record=False)
-                if len(launched) > 0:
-                    src = launched[0]
-                    if 'ubuntu' in opts.image:
-                        wait_for_cloudinit_done(src)
-                    print("*** pausing " + src)
-                    do_pause([src], count, backend, opts)
-                    print("*** making {} copies".format(count))
-                    copies = do_copy(src, count, backend, opts)
-                    do_list(count, "copies", backend, opts)
-                    print("*** deleting the copies")
-                    do_delete(copies, 'copies', count, backend, opts)
+                launched, err = do_launch(1, backend, opts, record=False)
+                if len(launched) <= 0:
+                    raise Exception("error launching template for copy and snap")
+                src = launched[0]
+                if 'ubuntu' in opts.image:
+                    wait_for_cloudinit_done(src)
+                print("*** pausing " + src)
+                _, err = do_pause([src], count, backend, opts)
+                if err:
+                    raise Exception("error pausing")
 
-                    print("*** making {} snapshots".format(count))
-                    do_snapshot(src, count, backend, opts)
-                    print("*** cleaning up {} and snaps".format(src))
-                    # deleting src will delete the snapshots too:
-                    do_delete([src], 'container-with-snaps', count, backend,
-                              opts)
+                print("*** making {} copies".format(count))
+                copies, err = do_copy(src, count, backend, opts)
+                if err:
+                    raise Exception("error copying")
+
+                _, err = do_list(count, "copies", backend, opts)
+                if err:
+                    raise Exception("error listing")
+
+                print("*** deleting the copies")
+                _, err = do_delete(copies, 'copies', count, backend, opts)
+                if err:
+                    raise Exception("error deleting copies")
+
+                print("*** making {} snapshots".format(count))
+                _, err = do_snapshot(src, count, backend, opts)
+                if err:
+                    raise Exception("error snapshotting")
+                print("*** cleaning up {} and snaps".format(src))
+                # deleting src will delete the snapshots too:
+                _, err = do_delete([src], 'container-with-snaps', count, backend,
+                                   opts)
+                if err:
+                    raise Exception("error deleting at end")
+
                 print("*** check that we're clean:")
                 call("lxc list", shell=True)
         except:
